@@ -818,6 +818,7 @@ dependencies = [
  "craft-ai-engine",
  "craft-ai-engine-candle",
  "craft-ai-engine-rten",
+ "craft-ai-fantastico",
  "craft-ai-features",
  "craft-ai-media",
  "craft-ai-native",
@@ -945,6 +946,17 @@ dependencies = [
  "rten-tensor",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "craft-ai-fantastico"
+version = "0.1.0"
+dependencies = [
+ "craft-ai-core",
+ "craft-ai-http",
+ "fantastico-sdk",
+ "serde_json",
+ "ureq",
 ]
 
 [[package]]
@@ -1470,6 +1482,15 @@ checksum = "8be9f3dfaaffdae2972880079a491a1a8bb7cbed0b8dd7a347f668b4150a3b93"
 dependencies = [
  "event-listener",
  "pin-project-lite",
+]
+
+[[package]]
+name = "fantastico-sdk"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dcd56dee603c094b5e814b9a576608652e57481b605388a2b73c6a18734fe38e"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]
