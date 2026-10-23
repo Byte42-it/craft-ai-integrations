@@ -353,11 +353,14 @@ mod tests {
                 .map(Vec::len),
             Some(MAX_TOOL_CALLS + 1)
         );
+        // A finished stream around the long line: only the line cap can refuse it.
         let long = format!(
-            "data: {{\"choices\":[{{\"delta\":{{\"content\":\"{}\"}}}}]}}",
-            "x".repeat(MAX_LINE_BYTES)
+            "data: {{\"choices\":[{{\"delta\":{{\"content\":\"{}\"}}}}]}}\n{}\ndata: [DONE]\n",
+            "x".repeat(MAX_LINE_BYTES),
+            r#"data: {"choices":[{"delta":{},"finish_reason":"stop"}]}"#
         );
-        assert!(assemble(long.as_bytes(), &mut |_| {}, &|| false).is_err());
+        let e = assemble(long.as_bytes(), &mut |_| {}, &|| false).unwrap_err();
+        assert!(e.contains("too long"), "{e}");
     }
 
     #[test]
