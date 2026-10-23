@@ -62,6 +62,44 @@ impl NativeSetupPlan {
         })
     }
 
+    /// Download only into a newly made directory. The directory creation is atomic and refuses
+    /// an existing directory, so recovery never reuses or replaces a rejected model copy.
+    pub fn download_fresh(&self, request: NativeInstall<'_>) -> Result<CheckedNative, AiError> {
+        if !self.available {
+            return Err(AiError::unsupported("this app cannot use this option yet"));
+        }
+        if self.route.weights().is_none() {
+            return Err(AiError::invalid("that model has no main file to open"));
+        }
+        if request.cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(AiError::new(
+                craft_ai_core::ErrorKind::Cancelled,
+                "download cancelled",
+            ));
+        }
+        if self.needs_agreement() && !request.licences_accepted {
+            return Err(AiError::invalid(
+                "accept the model licence before downloading",
+            ));
+        }
+        let destination = self
+            .destination()
+            .ok_or_else(|| AiError::invalid("choose a new model folder first"))?;
+        std::fs::create_dir(destination).map_err(|error| match error.kind() {
+            std::io::ErrorKind::AlreadyExists => {
+                AiError::invalid("choose a new model folder: this model directory already exists")
+            }
+            std::io::ErrorKind::NotFound => {
+                AiError::invalid("the chosen model folder is missing; choose a new one")
+            }
+            std::io::ErrorKind::PermissionDenied => {
+                AiError::invalid("cannot write to this model folder; choose another location")
+            }
+            _ => AiError::invalid(format!("could not create the model folder: {error}")),
+        })?;
+        self.download(request)
+    }
+
     /// The tool this plan is for.
     pub fn feature(&self) -> &Feature {
         &self.feature
@@ -81,6 +119,11 @@ impl NativeSetupPlan {
     /// Bytes a download would fetch, counting only files already present at the destination as reusable.
     pub fn download_bytes(&self) -> u64 {
         self.download_bytes
+    }
+    /// Whether the person must agree to a licence before the download starts. False for files whose
+    /// terms need no agreement (SAM 2.1), so the setup screen asks for nothing it does not need.
+    pub fn needs_agreement(&self) -> bool {
+        self.route.needs_agreement()
     }
     /// Whether this app has an adapter for the runtime. Without one nothing here can be used.
     pub fn available(&self) -> bool {

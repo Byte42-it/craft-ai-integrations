@@ -276,6 +276,37 @@ Setting up a model (downloads, keys, a local server) belongs to the launcher's S
 to your own Preferences, built from the same shared pieces. Do not build a second setup flow. If you
 have no setup screen, your popup links to the launcher.
 
+If you do draw the set-up screen for a built-in model, the shared state keeps the steps in order,
+so you draw them and run the work on a thread:
+
+1. `FolderDesk::prepare_native_setup` builds the plan, and `SetupSession::new` holds it. The plan
+   says the size, the destination and whether any file needs a licence agreement
+   (`NativeSetupPlan::needs_agreement`). Show the tick box only then. With no model folder
+   chosen the plan has no destination and `blocker` says `NeedsFolder`. Show the suggested folder
+   and let the person take it.
+2. Only when the person takes the suggested folder, call `FolderDesk::ensure_default`, then give
+   `SetupSession::review` a fresh plan. It takes the suggested folder only when the person has
+   none, and never replaces one they chose. Do not call it while drawing the first screen: it
+   makes the folder.
+3. One button calls `SetupSession::start`. It checks the files already on disk when there are
+   complete ones, and downloads when there are not. When it does nothing, `SetupSession::blocker`
+   says why (busy, no folder, agreement missing, this app cannot run it). If a check of the
+   files on disk fails, `blocker` asks for a new empty model folder. Use the host's folder picker
+   and `FolderDesk::add_new` and `set_default`, then review the new plan. The old files stay put.
+   Only the newly approved destination may be downloaded to. Run the returned `SetupRequest` with
+   `SetupRequest::run` on a worker, and report progress and the answer with
+   `report_progress` and `complete`.
+4. When `session.checked()` has files, `ToolDesk::adopt` makes them a model the tool can use. It
+   accepts only checked files. It binds the tool only if no choice exists. If one does,
+   `Adopted::kept` names it, so you can ask before calling `ToolDesk::choose`.
+5. `ToolDesk::start_sample` and `ToolDesk::finish` try it. A built-in selection model gets a click
+   on the test picture, because every built-in route reads clicks and some read no words. A
+   selection that chose nothing fails the test, and so does a selection that returned a mask with
+   no result beside it, because the contract gives every route both.
+
+Nothing in these steps binds a model, downloads anything or starts a job without the person
+pressing the button.
+
 ## 10. Errors, in one table
 
 A failed job carries an `AiError { kind, message }`. The message is safe to show.

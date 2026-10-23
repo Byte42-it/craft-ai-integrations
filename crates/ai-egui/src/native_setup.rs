@@ -9,6 +9,9 @@ pub enum NativeSetupAction {
     Use(CheckedNative),
     FindFiles,
     ChangeFolder,
+    /// The person took the suggested model folder. The host calls `FolderDesk::ensure_default`
+    /// and shows a fresh plan.
+    UseSuggestedFolder,
     Cancel(SetupTicket),
     Back,
 }
@@ -17,6 +20,8 @@ pub enum NativeSetupAction {
 pub const ACCEPT_LICENCES: &str = "I accept the model's licences";
 /// Label of the download button.
 pub const DOWNLOAD_MODEL: &str = "Download model files";
+/// Label of the button that takes the suggested model folder when none is chosen.
+pub const USE_SUGGESTED_FOLDER: &str = "Use the suggested folder";
 /// Label of the button that checks files already on disk.
 pub const CHECK_FILES: &str = "Check existing files";
 /// Label of the button that applies checked files; the host makes the choice, not the widget.
@@ -48,6 +53,20 @@ pub fn native_model_setup(ui: &mut Ui, session: &mut SetupSession) -> Option<Nat
         ui.label(destination.to_string_lossy());
     } else {
         ui.label("Choose a model folder before downloading.");
+        // Taking the suggestion makes the folder, so show where it is first, and offer it only
+        // when this computer has one.
+        if let Some(suggested) = craft_ai_native::paths::suggested_models_dir() {
+            ui.label(format!("Suggested folder: {}", suggested.to_string_lossy()));
+            if ui
+                .add_enabled(
+                    plan.available() && !session.busy(),
+                    egui::Button::new(USE_SUGGESTED_FOLDER),
+                )
+                .clicked()
+            {
+                return Some(NativeSetupAction::UseSuggestedFolder);
+            }
+        }
     }
     let mut licences = Vec::new();
     for file in &plan.route().models {
@@ -101,36 +120,38 @@ pub fn native_model_setup(ui: &mut Ui, session: &mut SetupSession) -> Option<Nat
     if let Some(kind) = session.problem() {
         ui.colored_label(ui.visuals().warn_fg_color, setup_problem(kind));
     }
+    if session.blocker() == Some(craft_ai_client::SetupBlock::NeedsFreshFolder) {
+        ui.label("These files did not pass their check. Choose a new empty model folder for the download. The old files will be left alone.");
+    }
     if !plan.available() {
         ui.label("This app can't use this option yet. Choose another option.");
     }
     if let Some(directory) = plan.existing_directory() {
         ui.label("Existing model files:");
         ui.label(directory.to_string_lossy());
-        if ui
-            .add_enabled(plan.available(), egui::Button::new(CHECK_FILES))
-            .clicked()
-        {
-            return session
-                .begin(craft_ai_client::SetupTask::CheckExisting)
-                .map(NativeSetupAction::Work);
-        }
     }
+    // One start button, and the session says what it does: check the complete files on disk, or
+    // download when there are none or they failed their check. The widget never picks the task.
+    let task = session.next_task();
+    // Ask only when a licence needs it: files with no terms to agree to need no tick box, and
+    // checking files already on disk agrees to nothing.
+    let needs_agreement = plan.needs_agreement() && task == craft_ai_client::SetupTask::Download;
     let mut accepted = session.accepted();
-    ui.add_enabled_ui(plan.available(), |ui| {
-        ui.checkbox(&mut accepted, ACCEPT_LICENCES);
-    });
-    session.accept_licences(accepted);
+    if needs_agreement {
+        ui.add_enabled_ui(plan.available(), |ui| {
+            ui.checkbox(&mut accepted, ACCEPT_LICENCES);
+        });
+        session.accept_licences(accepted);
+    }
+    let label = match task {
+        craft_ai_client::SetupTask::CheckExisting => CHECK_FILES,
+        craft_ai_client::SetupTask::Download => DOWNLOAD_MODEL,
+    };
     if ui
-        .add_enabled(
-            plan.available() && accepted && plan.destination().is_some(),
-            egui::Button::new(DOWNLOAD_MODEL),
-        )
+        .add_enabled(session.blocker().is_none(), egui::Button::new(label))
         .clicked()
     {
-        return session
-            .begin(craft_ai_client::SetupTask::Download)
-            .map(NativeSetupAction::Work);
+        return session.start().map(NativeSetupAction::Work);
     }
     if ui
         .add_enabled(plan.available(), egui::Button::new("Find model files"))

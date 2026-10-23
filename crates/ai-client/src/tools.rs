@@ -9,8 +9,9 @@
 
 use std::time::{Duration, Instant};
 
-use craft_ai_core::job::Event;
+use craft_ai_core::job::{Event, Output};
 use craft_ai_core::role::resolve;
+use craft_ai_core::segment;
 use craft_ai_core::{
     AiError, AppId, Billing, Binding, ConnectionId, ConsentLedger, Disclosure, JobState, Locality,
     ModelId, Payload, Request, Role, RoleId, StoreFile,
@@ -18,7 +19,7 @@ use craft_ai_core::{
 use craft_ai_native::ConsentFile;
 use craft_ai_native::shared::SharedStore;
 
-use craft_ai_features::{Feature, setup_options};
+use craft_ai_features::{Feature, sample_request_for, setup_options};
 
 use crate::client::{AiClient, Choice, Job, RoleStatus};
 use crate::popup::MissingModel;
@@ -325,6 +326,39 @@ impl ToolDesk {
         Ok(TestStart::Started(self.client.start(&plan, &ledger)?))
     }
 
+    /// Starts the sample test that suits the tool's current choice. A built-in selection model
+    /// reads clicks, so it gets a click on the picture; every other route gets the description
+    /// sample. A tool with no choice made is refused before anything is sent, like
+    /// [`start_test`](Self::start_test).
+    pub fn start_sample(&self, feature: &Feature, agreed: bool) -> Result<TestStart, AiError> {
+        let role = feature
+            .role()
+            .ok_or_else(|| AiError::invalid("the tool id is not valid"))?;
+        // Built in means the connection this suite saves for the engine, holding the model the
+        // engine's recipe names: a custom connection may reuse the name, and connection
+        // management can put another model under that id, either of which may need words the
+        // click sample lacks.
+        let built_in = match self.client.local_route_for(&role) {
+            Ok(Some(route)) => feature
+                .engine_recipe(&route.provider)
+                .and_then(|recipe| {
+                    recipe
+                        .native
+                        .iter()
+                        .find(|native| native.provider == route.provider)
+                })
+                .is_some_and(|native| {
+                    route.connection.as_str()
+                        == crate::local::native_connection_id(&feature.id, &route.provider)
+                        && route.model.as_str() == native.model
+                }),
+            _ => false,
+        };
+        let request = sample_request_for(feature, built_in)
+            .ok_or_else(|| AiError::unsupported("there is no test for this tool yet"))?;
+        self.start_test(&role, request, agreed)
+    }
+
     /// Waits for a started sample and says whether it produced something of the right kind.
     pub fn finish(role: &Role, job: &Job, timeout: Duration) -> SampleReport {
         let started = Instant::now();
@@ -369,6 +403,30 @@ impl ToolDesk {
                 message: "the model finished but returned nothing".to_owned(),
             };
         }
+        // A selection that ran but chose nothing did not do the job, however well it answered.
+        // Only the small result-metadata outputs are copied, never a picture or video.
+        let answers: Vec<Output> = done
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Output(o) if is_metadata(&o.payload) => Some(o.clone()),
+                _ => None,
+            })
+            .collect();
+        // The contract gives every selection a result beside its mask, so a missing one is a
+        // route that does not follow it, not a pass.
+        let found = segment::read_found(&answers);
+        if found.is_none() && role.capability.as_str() == segment::CAPABILITY {
+            return SampleReport::Failed {
+                message: "the model returned a mask but did not say whether it selected anything"
+                    .to_owned(),
+            };
+        }
+        if found.is_some_and(|found| !found.matched) {
+            return SampleReport::Failed {
+                message: "the model ran but selected nothing in the test picture".to_owned(),
+            };
+        }
         let right_kind = outputs.iter().filter(|p| media_kind(p) == wanted).count();
         if right_kind == 0 {
             return SampleReport::Failed {
@@ -380,6 +438,12 @@ impl ToolDesk {
             millis,
         }
     }
+}
+
+/// Whether `payload` is inline JSON, the form of a selection result (`segment::read_found`).
+fn is_metadata(payload: &Payload) -> bool {
+    matches!(payload, Payload::Inline { media_type, .. }
+        if media_type.as_str() == segment::FOUND_MEDIA_TYPE)
 }
 
 fn media_kind(payload: &Payload) -> String {
