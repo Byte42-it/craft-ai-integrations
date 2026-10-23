@@ -195,6 +195,8 @@ U3 = [
     ('bundle-parent-link-followed', DOWNLOAD, 'if !actual.starts_with(&root) {', 'if false {', E, 'download', 'links_outside_the_destination'),
     ('scan-lists-huge-text-files', SCAN, 'meta.len() <= SMALL_FILE_LIMIT', 'true', E, 'detect', 'the_scan_lists'),
     ('scan-ignores-bundle-config-files', SCAN, 'const SMALL_EXTENSIONS: &[&str] = &["json", "py", "txt"];', 'const SMALL_EXTENSIONS: &[&str] = &[];', E, 'detect', 'the_scan_lists'),
+    ('model-paths-file-size-unchecked', C + 'ai-comfy-env/src/detect.rs', 'if !meta.is_file() || meta.len() > MAX_CONFIG_BYTES {', 'if !meta.is_file() {', E, 'detect', 'a_model_paths_file_that_cannot_be_used_adds_nothing'),
+    ('model-paths-file-cap-unchecked', C + 'ai-comfy-env/src/detect.rs', 'if self.model_dirs.len() < MAX_EXTRA_DIRS && !self.model_dirs.contains(&entry) {', 'if !self.model_dirs.contains(&entry) {', E, 'detect', 'the_folder_cap_counts'),
 ]
 # `..` is also stopped by the trailing-dot rule, so this mutant lifts both checks for `..` alone.
 DOT_DOT_OLD = """if part.is_empty() || part == "." || part == ".." || part.len() > 255 {
@@ -487,6 +489,9 @@ from mutation_generic import GS_CASES  # noqa: E402
 from mutation_generic_mask import GM_CASES  # noqa: E402
 from mutation_generic_uploads import GU_CASES  # noqa: E402
 from mutation_segment import SEG_CASES  # noqa: E402
+from mutation_burn_preparation import BP  # noqa: E402
+from mutation_burn_engine import BE  # noqa: E402
+from mutation_first_run import FR  # noqa: E402
 
 PS_RS = C + 'ai-comfy-env/src/source/pack/status.rs'
 PS = [
@@ -548,7 +553,7 @@ S21 = [
     ('selections-share-a-sink-name', SAM21, 'NEXT_SELECTION.fetch_add(1, Ordering::Relaxed)', '0', CU, 'sam21_session', 'its_own_sink_name'),
 ]
 
-GROUPS = {'rt': RTEN_CASES, 'gu': GU_CASES, 'gm': GM_CASES, 'gs': GS_CASES, 'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 's21': S21, 'ca': CA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF}
+GROUPS = {'fr': FR, 'be': BE, 'bp': BP, 'rt': RTEN_CASES, 'gu': GU_CASES, 'gm': GM_CASES, 'gs': GS_CASES, 'seg': SEG_CASES, 'nw': NW, 'nq': NQ, 'ns': NS, 'nf': NF, 'ce': CE, 'cg': CG, 'sf': SF, 's21': S21, 'ca': CA, 'lg': LG, 'ps': PS, 'ct': CT, 'u2': U2, 'nr': NR, 'u1': U1, 'u3': U3, 'u4': U4, 'p4': P4, 'p10': P10, 'v1': V1, 'v2': V2, 'v3': V3, 'sd': SD, 'vx': VX, 'lc': LC, 'lr': LR, 'wf': WF}
 # Mutants whose effect is also refused by a second, independent check on this machine. They are
 # recorded as equivalent here, with the reason, and are never counted as caught.
 EQUIVALENT = {

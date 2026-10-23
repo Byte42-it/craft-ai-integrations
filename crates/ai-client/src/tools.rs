@@ -9,8 +9,9 @@
 
 use std::time::{Duration, Instant};
 
-use craft_ai_core::job::Event;
+use craft_ai_core::job::{Event, Output};
 use craft_ai_core::role::resolve;
+use craft_ai_core::segment;
 use craft_ai_core::{
     AiError, AppId, Billing, Binding, ConnectionId, ConsentLedger, Disclosure, JobState, Locality,
     ModelId, Payload, Request, Role, RoleId, StoreFile,
@@ -18,7 +19,7 @@ use craft_ai_core::{
 use craft_ai_native::ConsentFile;
 use craft_ai_native::shared::SharedStore;
 
-use craft_ai_features::{Feature, setup_options};
+use craft_ai_features::{Feature, sample_request_for, setup_options};
 
 use crate::client::{AiClient, Choice, Job, RoleStatus};
 use crate::popup::MissingModel;
@@ -130,6 +131,32 @@ impl ToolDesk {
         connection: &ConnectionId,
         model: &ModelId,
     ) -> Result<(), AiError> {
+        self.write_choice(role, connection, model, false)
+            .map(|_| ())
+    }
+
+    /// Chooses the model only if the tool has no suite-wide choice, checked inside the same store
+    /// lock as the write, so a choice made by another app a moment ago is never overwritten.
+    /// Returns `false`, writing nothing, when a choice already exists.
+    pub fn choose_if_unchosen(
+        &self,
+        role: &Role,
+        connection: &ConnectionId,
+        model: &ModelId,
+    ) -> Result<bool, AiError> {
+        self.write_choice(role, connection, model, true)
+    }
+
+    /// The write behind [`choose`](Self::choose) and [`choose_if_unchosen`](Self::choose_if_unchosen):
+    /// With `only_if_unchosen`, first stops when a choice exists; otherwise checks the tool and
+    /// proposed connection and writes under the same store lock. Returns whether it wrote.
+    fn write_choice(
+        &self,
+        role: &Role,
+        connection: &ConnectionId,
+        model: &ModelId,
+        only_if_unchosen: bool,
+    ) -> Result<bool, AiError> {
         let binding = Binding {
             role: role.id.clone(),
             connection: connection.clone(),
@@ -138,23 +165,27 @@ impl ToolDesk {
         // Check inside the same store lock as the write: another app may change the tool or
         // connection between an unlocked read and the update.
         self.shared.update(|store| {
+            if only_if_unchosen && store.defaults.iter().any(|b| b.role == role.id) {
+                return Ok::<bool, AiError>(false);
+            }
             store
                 .check_tool(role)
                 .map_err(|e| AiError::invalid(e.to_string()))?;
             resolve(role, &[std::slice::from_ref(&binding)], &store.connections)
                 .map_err(|e| AiError::invalid(e.to_string()))?;
             set_default(store, binding);
-            Ok::<(), AiError>(())
-        })??;
-        Ok(())
+            Ok(true)
+        })?
     }
 
-    /// Gives every tool with no model chosen the best one that is connected: one on this computer
-    /// first, then the first hosted one. A choice the person made is never touched, even one that
-    /// no longer works, so what they picked is still there when the connection comes back. Returns
-    /// the tools bound now.
-    pub fn auto_bind(&self, roles: &[Role]) -> Result<Vec<RoleId>, AiError> {
-        let mut bound = Vec::new();
+    /// What could be chosen for every tool with no model chosen: the best connected one, on this
+    /// computer first, then the first hosted one. **Nothing is written.** A choice is made only
+    /// when the person says yes to the list: show it, then pass it to
+    /// [`accept_recommended`](Self::accept_recommended), which applies exactly what was shown and
+    /// skips any tool that got a choice in the meantime. A choice the person made is never offered
+    /// over, even one that no longer works, so it is still there when the connection comes back.
+    pub fn auto_bind_offer(&self, roles: &[Role]) -> Result<Vec<(RoleId, Choice)>, AiError> {
+        let mut offer = Vec::new();
         for role in roles {
             let view = self.view(role)?;
             if view.bound.is_some() {
@@ -166,11 +197,10 @@ impl ToolDesk {
                 .find(|c| c.locality == Locality::Local)
                 .or_else(|| view.choices.first());
             if let Some(choice) = pick {
-                self.choose(role, &choice.connection, &choice.model)?;
-                bound.push(role.id.clone());
+                offer.push((role.id.clone(), choice.clone()));
             }
         }
-        Ok(bound)
+        Ok(offer)
     }
 
     /// The person said yes to "use the recommended models for N features?": makes each offered
@@ -200,8 +230,11 @@ impl ToolDesk {
                     .push(skip("A model was chosen for this feature in the meantime."));
                 continue;
             }
-            match self.choose(role, &choice.connection, &choice.model) {
-                Ok(()) => done.bound.push(tool.clone()),
+            match self.choose_if_unchosen(role, &choice.connection, &choice.model) {
+                Ok(true) => done.bound.push(tool.clone()),
+                Ok(false) => done
+                    .skipped
+                    .push(skip("A model was chosen for this feature in the meantime.")),
                 Err(_) => done
                     .skipped
                     .push(skip("That model is no longer available.")),
@@ -293,6 +326,39 @@ impl ToolDesk {
         Ok(TestStart::Started(self.client.start(&plan, &ledger)?))
     }
 
+    /// Starts the sample test that suits the tool's current choice. A built-in selection model
+    /// reads clicks, so it gets a click on the picture; every other route gets the description
+    /// sample. A tool with no choice made is refused before anything is sent, like
+    /// [`start_test`](Self::start_test).
+    pub fn start_sample(&self, feature: &Feature, agreed: bool) -> Result<TestStart, AiError> {
+        let role = feature
+            .role()
+            .ok_or_else(|| AiError::invalid("the tool id is not valid"))?;
+        // Built in means the connection this suite saves for the engine, holding the model the
+        // engine's recipe names: a custom connection may reuse the name, and connection
+        // management can put another model under that id, either of which may need words the
+        // click sample lacks.
+        let built_in = match self.client.local_route_for(&role) {
+            Ok(Some(route)) => feature
+                .engine_recipe(&route.provider)
+                .and_then(|recipe| {
+                    recipe
+                        .native
+                        .iter()
+                        .find(|native| native.provider == route.provider)
+                })
+                .is_some_and(|native| {
+                    route.connection.as_str()
+                        == crate::local::native_connection_id(&feature.id, &route.provider)
+                        && route.model.as_str() == native.model
+                }),
+            _ => false,
+        };
+        let request = sample_request_for(feature, built_in)
+            .ok_or_else(|| AiError::unsupported("there is no test for this tool yet"))?;
+        self.start_test(&role, request, agreed)
+    }
+
     /// Waits for a started sample and says whether it produced something of the right kind.
     pub fn finish(role: &Role, job: &Job, timeout: Duration) -> SampleReport {
         let started = Instant::now();
@@ -337,6 +403,30 @@ impl ToolDesk {
                 message: "the model finished but returned nothing".to_owned(),
             };
         }
+        // A selection that ran but chose nothing did not do the job, however well it answered.
+        // Only the small result-metadata outputs are copied, never a picture or video.
+        let answers: Vec<Output> = done
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Output(o) if is_metadata(&o.payload) => Some(o.clone()),
+                _ => None,
+            })
+            .collect();
+        // The contract gives every selection a result beside its mask, so a missing one is a
+        // route that does not follow it, not a pass.
+        let found = segment::read_found(&answers);
+        if found.is_none() && role.capability.as_str() == segment::CAPABILITY {
+            return SampleReport::Failed {
+                message: "the model returned a mask but did not say whether it selected anything"
+                    .to_owned(),
+            };
+        }
+        if found.is_some_and(|found| !found.matched) {
+            return SampleReport::Failed {
+                message: "the model ran but selected nothing in the test picture".to_owned(),
+            };
+        }
         let right_kind = outputs.iter().filter(|p| media_kind(p) == wanted).count();
         if right_kind == 0 {
             return SampleReport::Failed {
@@ -348,6 +438,12 @@ impl ToolDesk {
             millis,
         }
     }
+}
+
+/// Whether `payload` is inline JSON, the form of a selection result (`segment::read_found`).
+fn is_metadata(payload: &Payload) -> bool {
+    matches!(payload, Payload::Inline { media_type, .. }
+        if media_type.as_str() == segment::FOUND_MEDIA_TYPE)
 }
 
 fn media_kind(payload: &Payload) -> String {
