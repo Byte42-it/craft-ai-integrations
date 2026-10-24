@@ -3755,9 +3755,9 @@ checksum = "2acce4a10f12dc2fb14a218589d4f1f62ef011b2d0cc4b3cb1bba8e94da14649"
 
 [[package]]
 name = "fantastico-sdk"
-version = "0.2.1"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "435f7391450c352a563bec3b930d10aae267136e95e8ee81c8d8b9f6fe02c142"
+checksum = "76044968b184c817d8d1aa67f5f827cda2972eb366d19606222df021fa1265be"
 dependencies = [
  "serde_json",
 ]
@@ -8828,7 +8828,7 @@ version = "2.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "86a801b3cea342a06d468c8710662aa29e5e05e4f5c0d62f00bbb7f2ad7941c2"
 dependencies = [
- "rand 0.9.5",
+ "rand 0.10.3",
 ]
 
 [[package]]
