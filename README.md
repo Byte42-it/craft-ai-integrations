@@ -36,6 +36,12 @@ Layout and rules mirror craft-libs: edition 2024, `MIT OR Apache-2.0`, no `unsaf
 | `craft-ai-comfy-env` | Finds an existing ComfyUI Desktop install, inventories its model files and node packs, downloads missing model files into it. |
 | `craft-ai-egui` | Theme-neutral egui widgets: status, model picker, consent prompt, job progress, connection panel, history. Needs Rust 1.95. |
 
+`craft-ai-egui` targets egui 0.37 and resolves it through the reviewed storytold family at
+`6d518fc799681571963842f95b55a6b68431b15a`, with winit at
+`a517b3846ee8457d84ee4975110bfda6797c44dc`. An adopting app repeats the complete `[patch.crates-io]`
+recipe at its own root; `consumer-smoke/` is the small compile/check root for that recipe and the
+single `craft-ai-core` identity. Bundled fonts stay off in the library and are a host choice.
+
 Building on this layer (use a tool in your app, declare a new tool, or bring a service or model): start at [docs/adopting](docs/adopting/README.md). The short version is [docs/ADOPT-A-TOOL.md](docs/ADOPT-A-TOOL.md).
 
 Which crate owns what, and what stays in each app: [docs/LAYOUT.md](docs/LAYOUT.md). The shared-tool
@@ -68,8 +74,17 @@ Read [docs/STATUS.md](docs/STATUS.md) before relying on a provider or tool. In s
 - **Tested against scripted servers on localhost:** every hosted adapter, the media copier, the generic
   ComfyUI adapter, the declarative adapter and the client flow.
 - **Run for real on one machine:** the SAM 3 point and session clients through a headless ComfyUI; SAM 2.1 on rten with the published ONNX files; and an imported selection graph on ComfyUI 0.22.3. All on Windows, with one sample picture.
+- **Migrated shared widgets, headless:** the targeted `craft-ai-egui`/`craft-ai-engine` tests and the
+  locked consumer smoke passed 126 tests with 0 failures and 4 ignored doctests under managed job
+  `egui037-ai-final-ci-20261025-1331`, with formatting that left the worktree unchanged, strict
+  all-target clippy for those two packages, five committed kittest snapshots, one draw test and one
+  `craft-ai-core` identity on Linux. The earlier 108-test mutation checkpoint is historical. The
+  rendererless smoke does not use winit.
 - **Not verified:** any real hosted service, TLS behind an intercepting proxy, macOS and Linux
   keychains, macOS builds of the test suite, and any app running a tool through the shared binding.
+  Native widget behavior on Linux X11/Wayland and Windows (focus, keyboard, clipboard, IME and
+  rendering), physical-GPU qualification, performance, and app adoption of the widgets also remain
+  unverified.
 
 ## Licence
 
